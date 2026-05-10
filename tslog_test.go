@@ -2,10 +2,12 @@ package tslog_test
 
 import (
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
+	"github.com/go-openapi/testify/require"
 	"github.com/tinh-tinh/tinhtinh/v2/core"
 	"github.com/tinh-tinh/tslog"
 )
@@ -48,9 +50,6 @@ func TestForRoot(t *testing.T) {
 	testClient := testServer.Client()
 
 	resp, err := testClient.Get(testServer.URL + "/test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
+	require.Nil(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
