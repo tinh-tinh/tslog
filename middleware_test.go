@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
@@ -15,17 +16,6 @@ import (
 
 func TestMiddleware(t *testing.T) {
 	loggerMiddleware := tslog.Middleware(tslog.MiddlewareOptions{
-		Fnc: func(ctx core.Ctx) {
-			logger := ctx.Ref(tslog.TSLOG).(*slog.Logger)
-			logger.Info("Middleware executed",
-				slog.Group("http",
-					slog.Group("request",
-						"method", ctx.Req().Method,
-						"path", ctx.Req().URL.Path,
-					),
-				),
-			)
-		},
 		SkipPaths: []string{
 			"/test/health",
 		},
@@ -88,13 +78,12 @@ func (h ContextHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func TestMiddlewareContext(t *testing.T) {
+	hostname, _ := os.Hostname()
 
 	loggerMiddleware := tslog.Middleware(tslog.MiddlewareOptions{
-		Fnc: func(ctx core.Ctx) {
-			logger := ctx.Ref(tslog.TSLOG).(*slog.Logger)
-
-			context := ctx.Req().Context()
-			logger.InfoContext(context, "API Request")
+		Attrs: []slog.Attr{
+			slog.Int("pid", os.Getpid()),
+			slog.String("hostname", hostname),
 		},
 	})
 
@@ -132,4 +121,80 @@ func TestMiddlewareContext(t *testing.T) {
 	resp, err := testClient.Get(testServer.URL + "/test")
 	require.Nil(t, err)
 	defer resp.Body.Close()
+}
+
+func TestMiddlewareError(t *testing.T) {
+	loggerMiddleware := tslog.Middleware(tslog.MiddlewareOptions{})
+
+	ctrlFnc := func(module core.Module) core.Controller {
+		ctrl := module.NewController("test")
+
+		ctrl.Get("error", func(ctx core.Ctx) error {
+			return ctx.Status(http.StatusInternalServerError).JSON(true)
+		})
+
+		ctrl.Get("warning", func(ctx core.Ctx) error {
+			return ctx.Status(http.StatusBadRequest).JSON(true)
+		})
+
+		return ctrl
+	}
+
+	moduleFnc := func() core.Module {
+		return core.NewModule(core.NewModuleOptions{
+			Imports:     []core.Modules{tslog.ForRoot(slog.NewJSONHandler(os.Stdout, nil))},
+			Controllers: []core.Controllers{ctrlFnc},
+			Middlewares: []core.Middleware{loggerMiddleware},
+		})
+	}
+	app := core.CreateFactory(moduleFnc)
+
+	testServer := httptest.NewServer(app.PrepareBeforeListen())
+	defer testServer.Close()
+
+	testClient := testServer.Client()
+
+	resp, err := testClient.Get(testServer.URL + "/test/error")
+	require.Nil(t, err)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	resp, err = testClient.Get(testServer.URL + "/test/warning")
+	require.Nil(t, err)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestPanic(t *testing.T) {
+	loggerMiddleware := tslog.Middleware(tslog.MiddlewareOptions{})
+
+	ctrlFnc := func(module core.Module) core.Controller {
+		ctrl := module.NewController("test")
+
+		ctrl.Get("error", func(ctx core.Ctx) error {
+			return ctx.Status(http.StatusInternalServerError).JSON(true)
+		})
+
+		ctrl.Get("warning", func(ctx core.Ctx) error {
+			return ctx.Status(http.StatusBadRequest).JSON(true)
+		})
+
+		return ctrl
+	}
+
+	moduleFnc := func() core.Module {
+		return core.NewModule(core.NewModuleOptions{
+			Imports:     []core.Modules{},
+			Controllers: []core.Controllers{ctrlFnc},
+			Middlewares: []core.Middleware{loggerMiddleware},
+		})
+	}
+	app := core.CreateFactory(moduleFnc)
+
+	testServer := httptest.NewServer(app.PrepareBeforeListen())
+	defer testServer.Close()
+
+	testClient := testServer.Client()
+
+	resp, err := testClient.Get(testServer.URL + "/test/error")
+	require.Nil(t, err)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
